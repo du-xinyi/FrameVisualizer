@@ -30,6 +30,11 @@ namespace
     constexpr auto kFontRebuildDelay = std::chrono::milliseconds(150); ///< 字号输入停止后再重建图集的防抖窗口
     constexpr auto kFallbackFrameInterval = std::chrono::microseconds(16'667); ///< 软件限帧约 60 FPS 的周期
     constexpr auto kMinimizedFrameInterval = std::chrono::milliseconds(50); ///< 不可渲染时降低轮询频率的周期
+    constexpr Uint32 kVideoSeekFastThresholdMs = 500; ///< 长按进入每次 5 帧的持续时间阈值
+    constexpr Uint32 kVideoSeekFasterThresholdMs = 1500; ///< 长按进入每次 10 帧的持续时间阈值
+    constexpr int64_t kVideoSeekNormalStep = 1; ///< 普通方向键单次移动帧数
+    constexpr int64_t kVideoSeekFastStep = 5; ///< Shift 或第一阶段长按的单次移动帧数
+    constexpr int64_t kVideoSeekFasterStep = 10; ///< 第二阶段长按的单次移动帧数
 
     void copyEndpointToInput(AppState &state);
 
@@ -496,6 +501,51 @@ void UiContext::Impl::processSdlEvent(const SDL_Event &event, AppState &state)
         return;
     }
 
+    // 文件逐帧快捷键由播放器独占，避免方向键同时改变 ImGui 导航焦点。
+    if ((event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) &&
+        !ImGui::GetIO().WantTextInput &&
+        !state.videoFilePath.empty() &&
+        (event.key.keysym.sym == SDLK_LEFT || event.key.keysym.sym == SDLK_RIGHT))
+    {
+        if (event.type == SDL_KEYUP)
+        {
+            if (heldVideoSeekKey_ == event.key.keysym.sym)
+            {
+                heldVideoSeekKey_ = SDLK_UNKNOWN;
+                videoSeekStartedAt_ = 0;
+            }
+            return;
+        }
+
+        if (event.key.repeat == 0 || heldVideoSeekKey_ != event.key.keysym.sym)
+        {
+            heldVideoSeekKey_ = event.key.keysym.sym;
+            videoSeekStartedAt_ = event.key.timestamp;
+        }
+        const Uint32 heldMs = event.key.timestamp - videoSeekStartedAt_;
+        int64_t step = kVideoSeekNormalStep;
+        if ((event.key.keysym.mod & KMOD_SHIFT) != 0)
+        {
+            step = kVideoSeekFastStep;
+        }
+        else if (heldMs >= kVideoSeekFasterThresholdMs)
+        {
+            step = kVideoSeekFasterStep;
+        }
+        else if (heldMs >= kVideoSeekFastThresholdMs)
+        {
+            step = kVideoSeekFastStep;
+        }
+
+        const int64_t delta = event.key.keysym.sym == SDLK_LEFT ? -step : step;
+        const int64_t lastFrame = std::max<int64_t>(0, state.videoFrameCount - 1);
+        const int64_t baseFrame = state.videoSeekRequested ? state.requestedVideoFrame :
+            state.videoFramePosition;
+        state.requestedVideoFrame = std::clamp(baseFrame + delta, int64_t{0}, lastFrame);
+        state.videoSeekRequested = true;
+        return;
+    }
+
     feedSdlEventToImGui(event);
 
     if (event.type == SDL_QUIT)
@@ -503,12 +553,29 @@ void UiContext::Impl::processSdlEvent(const SDL_Event &event, AppState &state)
         state.quit = true;
     }
 
+    // SDL 为 DROPFILE 路径分配内存，复制后必须立即释放。
+    if (event.type == SDL_DROPFILE)
+    {
+        if (event.drop.file != nullptr)
+        {
+            state.requestedVideoFile = event.drop.file;
+            state.videoFileOpenRequested = !state.requestedVideoFile.empty();
+            SDL_free(event.drop.file);
+        }
+        return;
+    }
+
     if (ImGui::GetIO().WantTextInput)
     {
         return;
     }
-    else if (event.type == SDL_KEYDOWN && event.key.repeat == 0)
+    else if (event.type == SDL_KEYDOWN)
     {
+        // 方向键允许系统重复事件实现长按；其余命令仅响应首次按下。
+        if (event.key.repeat != 0)
+        {
+            return;
+        }
         if (const SDL_Keycode sym = event.key.keysym.sym; sym >= 0 && sym <= 127)
         {
             handleKey(sym, state);
@@ -849,7 +916,7 @@ bool UiContext::Impl::updateAndRender(AppState &state)
 
 void UiContext::Impl::onEndpointChanged(AppState &state)
 {
-    // 端点变化使所有源相关 GPU 资源、派生图像和版本记录失效
+    // 数据源变化使所有源相关 GPU 资源、派生图像和版本记录失效
     copyEndpointToInput(state);
     clearFrameTexture();
     clearHistogramTexture();

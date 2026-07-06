@@ -65,7 +65,7 @@ public:
     /**
      * @brief 清除切换数据源后不可复用的纹理和派生状态
      *
-     * @param state 已更新端点的应用状态
+     * @param state 已切换到新 ZMQ 端点或本地视频的应用状态
      */
     void onEndpointChanged(AppState &state);
 
@@ -94,6 +94,8 @@ private:
     KeyboardListener keyboard_; ///< 终端快捷键采集与事件队列
     AsyncImageSaver imageSaver_; ///< 在工作线程执行图像编码和文件写入
     bool keyboardListening_ = false; ///< 终端键盘服务是否成功启动
+    SDL_Keycode heldVideoSeekKey_ = SDLK_UNKNOWN; ///< 当前按住的视频逐帧方向键
+    Uint32 videoSeekStartedAt_ = 0; ///< 当前方向键开始按下的 SDL 毫秒时间戳
 
     // === 字体状态 ===
     float uiFontSize_ = 32.0F; ///< 用户请求的字体像素尺寸

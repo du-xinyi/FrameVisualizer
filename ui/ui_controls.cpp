@@ -32,7 +32,7 @@ namespace
         {
             return {0.95F, 0.74F, 0.28F, 1.0F};
         }
-        if (state.connectionStatus == "receiving")
+        if (state.connectionStatus == "receiving" || state.connectionStatus == "playing")
         {
             return {0.36F, 0.82F, 0.45F, 1.0F};
         }
@@ -113,8 +113,30 @@ void UiContext::Impl::drawControlPanel(AppState &state, const ImVec2 &displaySiz
     const float footerHeight =
             ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y + 2.0F;
     ImGui::BeginChild("ControlBody", {0.0F, -footerHeight}, false);
+    const bool videoMode = !state.videoFilePath.empty();
 
-    if (ImGui::CollapsingHeader("Connection", ImGuiTreeNodeFlags_DefaultOpen))
+    if (videoMode && ImGui::CollapsingHeader("Video Source", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (ImGui::BeginTable("VideoSourceSummary", 2, ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 120.0F);
+            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextDisabled("Status");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextColored(statusColor(state), "%s",
+                state.connectionStatus.empty() ? "-" : state.connectionStatus.c_str());
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextDisabled("File");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextWrapped("%s", state.videoFilePath.c_str());
+            ImGui::EndTable();
+        }
+    }
+
+    if (!videoMode && ImGui::CollapsingHeader("Connection", ImGuiTreeNodeFlags_DefaultOpen))
     {
         if (ImGui::BeginTable("ConnectionSummary", 2, ImGuiTableFlags_SizingStretchProp))
         {
@@ -128,7 +150,7 @@ void UiContext::Impl::drawControlPanel(AppState &state, const ImVec2 &displaySiz
                 state.connectionStatus.empty() ? "-" : state.connectionStatus.c_str());
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::TextDisabled("Active EP");
+            ImGui::TextDisabled("Endpoint");
             ImGui::TableSetColumnIndex(1);
             ImGui::TextWrapped("%s", state.endpoint.c_str());
             ImGui::EndTable();
@@ -179,8 +201,6 @@ void UiContext::Impl::drawControlPanel(AppState &state, const ImVec2 &displaySiz
             ImGui::TableSetupColumn("L2", ImGuiTableColumnFlags_WidthFixed, 120.0F);
             ImGui::TableSetupColumn("V2", ImGuiTableColumnFlags_WidthStretch, 1.0F);
 
-            ImGui::TableNextRow();
-            tableItem("Frames", std::to_string(state.frameCount));
             char sourceText[32];
             if (state.sourceFps > 0.0F)
             {
@@ -190,39 +210,69 @@ void UiContext::Impl::drawControlPanel(AppState &state, const ImVec2 &displaySiz
             {
                 std::snprintf(sourceText, sizeof(sourceText), "-");
             }
-            tableItem("Source", sourceText);
-
-            ImGui::TableNextRow();
-            char receiveText[32];
-            std::snprintf(receiveText, sizeof(receiveText), "%.1f fps", state.receiveFps);
-            tableItem("Receive", receiveText);
             char renderText[32];
             std::snprintf(renderText, sizeof(renderText), "%.1f fps", state.renderFps);
-            tableItem("Display", renderText);
-
-            ImGui::TableNextRow();
-            char ageText[32];
-            std::snprintf(ageText, sizeof(ageText), "%.0f ms", state.frameAgeMs);
-            tableItem("Age", ageText);
             char decodeText[32];
             std::snprintf(decodeText, sizeof(decodeText), "%.2f ms", state.decodeTimeMs);
-            tableItem("Decode", decodeText);
 
-            ImGui::TableNextRow();
-            if (!state.lastFrame.empty())
+            if (videoMode)
             {
-                tableItem("Image", std::to_string(state.lastFrame.cols) + " x " +
+                ImGui::TableNextRow();
+                tableItem("Frame", std::to_string(state.videoFramePosition + 1) + " / " +
+                    std::to_string(state.videoFrameCount));
+                tableItem("Source", sourceText);
+
+                ImGui::TableNextRow();
+                char speedText[24];
+                std::snprintf(speedText, sizeof(speedText), "%.2gx", state.videoPlaybackSpeed);
+                tableItem("Speed", speedText);
+                tableItem("Display", renderText);
+
+                ImGui::TableNextRow();
+                tableItem("Decode", decodeText);
+                tableItem("Image", state.lastFrame.empty() ? "No frame" :
+                    std::to_string(state.lastFrame.cols) + " x " +
                     std::to_string(state.lastFrame.rows));
+
+                ImGui::TableNextRow();
                 tableItem("Format", imageFormatName(state.lastFrame, state.pixelFormat));
+                tableItem("State", state.paused ? "Paused" :
+                    (state.connectionStatus == "ended" ? "Ended" : "Playing"));
             }
             else
             {
-                tableItem("Image", "No frame");
-                tableItem("Format", "-");
+                ImGui::TableNextRow();
+                tableItem("Frames", std::to_string(state.frameCount));
+                tableItem("Source", sourceText);
+
+                ImGui::TableNextRow();
+                char receiveText[32];
+                std::snprintf(receiveText, sizeof(receiveText), "%.1f fps", state.receiveFps);
+                tableItem("Receive", receiveText);
+                tableItem("Display", renderText);
+
+                ImGui::TableNextRow();
+                char ageText[32];
+                std::snprintf(ageText, sizeof(ageText), "%.0f ms", state.frameAgeMs);
+                tableItem("Age", ageText);
+                tableItem("Decode", decodeText);
+
+                ImGui::TableNextRow();
+                if (!state.lastFrame.empty())
+                {
+                    tableItem("Image", std::to_string(state.lastFrame.cols) + " x " +
+                        std::to_string(state.lastFrame.rows));
+                    tableItem("Format", imageFormatName(state.lastFrame, state.pixelFormat));
+                }
+                else
+                {
+                    tableItem("Image", "No frame");
+                    tableItem("Format", "-");
+                }
             }
             ImGui::EndTable();
         }
-        if (ImGui::TreeNodeEx("Timing", ImGuiTreeNodeFlags_SpanAvailWidth))
+        if (!videoMode && ImGui::TreeNodeEx("Timing", ImGuiTreeNodeFlags_SpanAvailWidth))
         {
             ImGui::Text("Source frame: %llu",
                 static_cast<unsigned long long>(state.sourceFrameIndex));
@@ -419,7 +469,8 @@ void UiContext::Impl::drawControlPanel(AppState &state, const ImVec2 &displaySiz
                 static_cast<float>(kMaxZoom), "%.2fx");
         }
 
-        if (state.paused && state.historySize > 0)
+        // 本地视频已有完整时间轴，避免同时显示语义不同的实时流历史滑块。
+        if (state.paused && state.videoFilePath.empty() && state.historySize > 0)
         {
             const int latestPosition = state.historySize - 1;
             int historyPosition = latestPosition - state.historyOffset;
@@ -543,9 +594,17 @@ void UiContext::Impl::drawControlPanel(AppState &state, const ImVec2 &displaySiz
     if (ImGui::CollapsingHeader("Help"))
     {
         ImGui::TextDisabled("UI: %.0f px", uiFontSize_);
+        if (!state.videoFilePath.empty())
+        {
+            ImGui::TextWrapped("Video: timeline seek, speed menu, top-right X closes");
+            ImGui::TextWrapped("Left/Right: 1 frame; hold: 5 then 10 frames");
+            ImGui::TextWrapped("Shift+Left/Right: 5 frames; Space pause/resume");
+            ImGui::Separator();
+        }
         ImGui::TextWrapped("1 RGB, 2 Gray, 3 HSV");
         ImGui::TextWrapped("4 Red/Hue, 5 Green/Sat, 6 Blue/Value");
-        ImGui::TextWrapped("H histogram, Space pause, F fit");
+        ImGui::TextWrapped("H histogram, F fit%s",
+            state.videoFilePath.empty() ? ", Space pause" : "");
         ImGui::TextWrapped("Ctrl+wheel zoom, drag pan, Shift+drag ROI");
         ImGui::TextWrapped("Ctrl+Shift+wheel resize UI, +/- zoom");
         ImGui::TextWrapped("S save, Q/Esc quit");

@@ -14,6 +14,28 @@ namespace
     using ui_detail::kMaxZoom;
     using ui_detail::kMinZoom;
 
+    /** @brief 将帧位置按源帧率格式化为播放器时间文本 */
+    void formatVideoTime(char *buffer, const std::size_t size, const int64_t frame,
+                         const float fps)
+    {
+        const int64_t seconds = fps > 0.0F ?
+            static_cast<int64_t>(static_cast<double>(std::max<int64_t>(0, frame)) / fps) : 0;
+        const int64_t hours = seconds / 3600;
+        const int64_t minutes = seconds / 60 % 60;
+        const int64_t remainingSeconds = seconds % 60;
+        if (hours > 0)
+        {
+            std::snprintf(buffer, size, "%lld:%02lld:%02lld",
+                static_cast<long long>(hours), static_cast<long long>(minutes),
+                static_cast<long long>(remainingSeconds));
+        }
+        else
+        {
+            std::snprintf(buffer, size, "%02lld:%02lld", static_cast<long long>(minutes),
+                static_cast<long long>(remainingSeconds));
+        }
+    }
+
     /** @brief 将失败、陈旧、暂停和正常状态映射为视口状态栏颜色 */
     ImU32 statusBarColor(const AppState &state)
     {
@@ -127,7 +149,10 @@ void UiContext::Impl::drawImageWindow(AppState &state, const ImVec2 &displaySize
     {
         const ImVec2 available = ImGui::GetContentRegionAvail();
         const float statusBarHeight = ImGui::GetTextLineHeightWithSpacing() + 18.0F;
-        const ImVec2 imageAvailable(available.x, std::max(1.0F, available.y - statusBarHeight));
+        const float videoControlsHeight = state.videoFilePath.empty() ? 0.0F :
+            ImGui::GetFrameHeightWithSpacing() + 12.0F;
+        const ImVec2 imageAvailable(available.x,
+            std::max(1.0F, available.y - statusBarHeight - videoControlsHeight));
         const ImVec2 imageSize = scaledImageSize(state.lastFrame, imageAvailable, state);
         const ImVec2 cursor = ImGui::GetCursorPos();
         const float offsetX = (imageAvailable.x - imageSize.x) * 0.5F;
@@ -270,8 +295,10 @@ void UiContext::Impl::drawImageWindow(AppState &state, const ImVec2 &displaySize
         // 底部状态栏复用主窗口绘制列表，避免占用额外布局高度
         const ImVec2 windowPos = ImGui::GetWindowPos();
         const ImVec2 windowSize = ImGui::GetWindowSize();
-        const ImVec2 barMin(windowPos.x, windowPos.y + windowSize.y - statusBarHeight);
-        const ImVec2 barMax(windowPos.x + windowSize.x, windowPos.y + windowSize.y);
+        const ImVec2 barMin(windowPos.x,
+            windowPos.y + windowSize.y - statusBarHeight - videoControlsHeight);
+        const ImVec2 barMax(windowPos.x + windowSize.x,
+            windowPos.y + windowSize.y - videoControlsHeight);
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         drawList->AddRectFilled(barMin, barMax, statusBarColor(state));
         drawList->AddLine(barMin, {barMax.x, barMin.y}, IM_COL32(78, 86, 100, 255), 1.0F);
@@ -281,6 +308,12 @@ void UiContext::Impl::drawImageWindow(AppState &state, const ImVec2 &displaySize
         {
             std::snprintf(statusText, sizeof(statusText), "PAUSED   %s",
                 state.hoverPixelValid ? "pixel sample locked" : "frame locked");
+        }
+        else if (!state.videoFilePath.empty())
+        {
+            std::snprintf(statusText, sizeof(statusText), "VIDEO   frame %lld / %lld",
+                static_cast<long long>(state.videoFramePosition + 1),
+                static_cast<long long>(state.videoFrameCount));
         }
         else if (state.connectionStatus.rfind("failed:", 0) == 0 ||
             state.connectionStatus == "stale")
@@ -301,6 +334,81 @@ void UiContext::Impl::drawImageWindow(AppState &state, const ImVec2 &displaySize
         }
         drawList->AddText({barMin.x + 16.0F, barMin.y + 9.0F}, IM_COL32(235, 238, 244, 255),
             statusText);
+
+        if (!state.videoFilePath.empty())
+        {
+            const float closeSize = ImGui::GetFrameHeight();
+            ImGui::SetCursorScreenPos({windowPos.x + windowSize.x - closeSize - 10.0F,
+                windowPos.y + 10.0F});
+            if (ImGui::Button("X##close_video", {closeSize, closeSize}))
+            {
+                state.videoCloseRequested = true;
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Close video and return to ZMQ");
+            }
+
+            const ImVec2 controlsMin(windowPos.x, barMax.y);
+            drawList->AddRectFilled(controlsMin,
+                {windowPos.x + windowSize.x, windowPos.y + windowSize.y},
+                IM_COL32(28, 32, 39, 255));
+            ImGui::SetCursorScreenPos({controlsMin.x + 12.0F, controlsMin.y + 6.0F});
+
+            const int64_t firstFrame = 0;
+            const int64_t lastFrame = std::max<int64_t>(0, state.videoFrameCount - 1);
+            int64_t requestedFrame = std::clamp(state.videoFramePosition, firstFrame, lastFrame);
+            char currentTime[32];
+            char duration[32];
+            formatVideoTime(currentTime, sizeof(currentTime), state.videoFramePosition,
+                state.sourceFps);
+            formatVideoTime(duration, sizeof(duration), lastFrame, state.sourceFps);
+            char timeText[72];
+            std::snprintf(timeText, sizeof(timeText), "%s / %s", currentTime, duration);
+
+            const float speedWidth = 82.0F;
+            const float timeWidth = ImGui::CalcTextSize(timeText).x + 8.0F;
+            const float spacing = ImGui::GetStyle().ItemSpacing.x;
+            const bool showTime = windowSize.x >= timeWidth + speedWidth + 180.0F;
+            const float sliderWidth = std::max(80.0F,
+                windowSize.x - speedWidth - (showTime ? timeWidth + spacing : 0.0F) -
+                spacing * 2.0F - 24.0F);
+            ImGui::SetNextItemWidth(sliderWidth);
+            if (ImGui::SliderScalar("##video_seek", ImGuiDataType_S64, &requestedFrame,
+                &firstFrame, &lastFrame, ""))
+            {
+                state.requestedVideoFrame = requestedFrame;
+                state.videoSeekRequested = true;
+            }
+            ImGui::SameLine();
+            if (showTime)
+            {
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(timeText);
+                ImGui::SameLine();
+            }
+
+            constexpr const char *speedLabels[] = {"0.25x", "0.5x", "1x", "1.5x", "2x", "4x"};
+            constexpr float speeds[] = {0.25F, 0.5F, 1.0F, 1.5F, 2.0F, 4.0F};
+            int speedIndex = 2;
+            for (int i = 0; i < 6; ++i)
+            {
+                if (std::abs(state.videoPlaybackSpeed - speeds[i]) < 0.01F)
+                {
+                    speedIndex = i;
+                    break;
+                }
+            }
+            ImGui::SetNextItemWidth(speedWidth);
+            if (ImGui::Combo("##video_speed", &speedIndex, speedLabels, 6))
+            {
+                state.videoPlaybackSpeed = speeds[speedIndex];
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Playback speed");
+            }
+        }
     }
     else
     {

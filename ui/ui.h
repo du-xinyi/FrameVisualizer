@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -79,6 +80,17 @@ struct AppState
     bool endpointChangeRequested = false; ///< 是否存在尚未处理的端点切换请求
     bool endpointInputResetRequested = false; ///< 是否需要用有效端点覆盖输入框内容
     std::string connectionStatus; ///< 根据连接时间和帧龄生成的状态文本
+
+    // === 本地视频 ===
+    std::string videoFilePath; ///< 当前播放的本地视频路径；为空时使用 ZMQ 输入
+    std::string requestedVideoFile; ///< SDL 文件拖放提交、等待主循环打开的视频路径
+    bool videoFileOpenRequested = false; ///< 是否存在尚未处理的本地视频打开请求
+    int64_t videoFrameCount = 0; ///< 视频可定位的总帧数，无法获知时为 0
+    int64_t videoFramePosition = 0; ///< 当前显示帧的零基索引
+    int64_t requestedVideoFrame = 0; ///< 进度条或快捷键请求的零基目标帧
+    bool videoSeekRequested = false; ///< 是否存在尚未处理的视频定位请求
+    bool videoCloseRequested = false; ///< 是否请求关闭本地视频并返回 ZMQ 输入
+    float videoPlaybackSpeed = 1.0F; ///< 本地视频相对原始帧率的播放倍速
 
     // === 性能指标 ===
     int frameCount = 0; ///< 当前端点成功采用的帧总数
@@ -256,7 +268,7 @@ public:
     /**
      * @brief 清除不能跨数据源复用的纹理和交互缓存
      *
-     * @param state 已切换到新端点的应用状态
+     * @param state 已切换到新 ZMQ 端点或本地视频的应用状态
      */
     void onEndpointChanged(AppState &state) const;
 

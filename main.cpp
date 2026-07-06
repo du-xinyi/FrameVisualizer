@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -17,6 +18,7 @@
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/videoio.hpp>
 
 #include "frame_meta.pb.h"
 #include "frame_transport/frame_receiver.h"
@@ -800,6 +802,185 @@ class FrameRateTracker
     int displayed_ = 0; ///< 当前窗口实际上传并展示的新帧数
 };
 
+/**
+ * @brief 管理本地视频文件的顺序解码、播放节拍和随机定位
+ *
+ * @details 文件帧按媒体帧率和用户倍速调度，不采用 ZMQ 实时流的积压丢帧策略
+ */
+class VideoFilePlayer
+{
+  public:
+    /**
+     * @brief 打开视频文件并读取其帧率和总帧数
+     *
+     * @param path 本地视频文件路径
+     *
+     * @throws std::runtime_error OpenCV 无法打开指定文件
+     */
+    void open(const std::string &path)
+    {
+        cv::VideoCapture next(path);
+        if (!next.isOpened())
+        {
+            throw std::runtime_error("cannot open video file: " + path);
+        }
+
+        double fps = next.get(cv::CAP_PROP_FPS);
+        if (!std::isfinite(fps) || fps <= 0.0)
+        {
+            fps = 30.0;
+        }
+        capture_ = std::move(next);
+        frameInterval_ = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(1.0 / fps));
+        nextFrameTime_ = std::chrono::steady_clock::now();
+        fps_ = fps;
+        const double frameCount = capture_.get(cv::CAP_PROP_FRAME_COUNT);
+        frameCount_ = std::isfinite(frameCount) && frameCount > 0.0 ?
+            static_cast<int64_t>(frameCount) : 0;
+        frameIndex_ = 0;
+        ended_ = false;
+    }
+
+    /** @brief 释放当前视频并清除播放结束和帧位置状态 */
+    void close()
+    {
+        capture_.release();
+        ended_ = false;
+        frameIndex_ = 0;
+    }
+
+    /**
+     * @brief 返回当前是否持有已打开的视频
+     *
+     * @return 视频解码资源已打开时返回 true
+     */
+    [[nodiscard]] bool isOpen() const { return capture_.isOpened(); }
+
+    /**
+     * @brief 返回顺序读取是否已经到达视频末尾
+     *
+     * @return 最近一次读取到达末尾时返回 true
+     */
+    [[nodiscard]] bool ended() const { return ended_; }
+
+    /**
+     * @brief 返回视频声明的帧率
+     *
+     * @return 媒体帧率，元数据无效时为 30 FPS
+     */
+    [[nodiscard]] double fps() const { return fps_; }
+
+    /**
+     * @brief 返回下一次顺序读取使用的零基帧索引
+     *
+     * @return 下一次顺序读取的帧索引
+     */
+    [[nodiscard]] uint64_t frameIndex() const { return frameIndex_; }
+
+    /**
+     * @brief 返回视频声明的总帧数
+     *
+     * @return 总帧数，无法获取时为 0
+     */
+    [[nodiscard]] int64_t frameCount() const { return frameCount_; }
+
+    /**
+     * @brief 更新播放倍速并从当前时刻重新安排下一帧
+     *
+     * @param speed 相对媒体帧率的倍速，内部限制在 0.25 到 4.0
+     */
+    void setPlaybackSpeed(const float speed)
+    {
+        playbackSpeed_ = std::clamp(speed, 0.25F, 4.0F);
+        updateFrameInterval();
+        nextFrameTime_ = std::chrono::steady_clock::now() + frameInterval_;
+    }
+
+    /**
+     * @brief 定位到指定帧并立即解码该帧
+     *
+     * @param targetFrame 零基目标帧索引
+     * @param frame 接收解码结果
+     *
+     * @return 定位和解码均成功时返回 true
+     */
+    bool seekTo(const int64_t targetFrame, cv::Mat &frame)
+    {
+        if (!isOpen())
+        {
+            return false;
+        }
+        const int64_t upper = frameCount_ > 0 ? frameCount_ - 1 : targetFrame;
+        const int64_t clampedTarget = std::clamp(targetFrame, int64_t{0}, upper);
+        if (!capture_.set(cv::CAP_PROP_POS_FRAMES, static_cast<double>(clampedTarget)))
+        {
+            return false;
+        }
+        frameIndex_ = static_cast<uint64_t>(clampedTarget);
+        ended_ = false;
+        nextFrameTime_ = std::chrono::steady_clock::now();
+        return readDue(nextFrameTime_, frame);
+    }
+
+    /**
+     * @brief 在播放期限到达时顺序解码下一帧
+     *
+     * @param now 调度判断使用的单调时钟时间
+     * @param frame 接收解码结果
+     *
+     * @return 本次实际产生新帧时返回 true
+     */
+    bool readDue(const std::chrono::steady_clock::time_point now, cv::Mat &frame)
+    {
+        if (!isOpen() || ended_ || now < nextFrameTime_)
+        {
+            return false;
+        }
+        const auto started = std::chrono::steady_clock::now();
+        if (!capture_.read(frame) || frame.empty())
+        {
+            ended_ = true;
+            return false;
+        }
+        decodeTimeMs_ = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+        ++frameIndex_;
+        nextFrameTime_ += frameInterval_;
+        if (nextFrameTime_ <= now)
+        {
+            // 暂停恢复或解码过慢时从当前时刻重新计时，避免突发追赶旧时间线。
+            nextFrameTime_ = now + frameInterval_;
+        }
+        return true;
+    }
+
+    /**
+     * @brief 返回最近一次成功视频解码的耗时
+     *
+     * @return 解码耗时，单位为毫秒
+     */
+    [[nodiscard]] float decodeTimeMs() const { return decodeTimeMs_; }
+
+  private:
+    /** @brief 根据媒体帧率和当前倍速计算相邻展示帧间隔 */
+    void updateFrameInterval()
+    {
+        frameInterval_ = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(1.0 / (fps_ * playbackSpeed_)));
+    }
+
+    cv::VideoCapture capture_; ///< 当前文件的 OpenCV 视频解码资源
+    std::chrono::steady_clock::duration frameInterval_{}; ///< 当前倍速下的展示帧间隔
+    std::chrono::steady_clock::time_point nextFrameTime_{}; ///< 下一帧允许解码的单调时钟期限
+    double fps_ = 0.0; ///< 视频媒体帧率或无有效元数据时的回退帧率
+    int64_t frameCount_ = 0; ///< 视频声明的总帧数，未知时为 0
+    uint64_t frameIndex_ = 0; ///< 下一次顺序读取对应的零基帧索引
+    float decodeTimeMs_ = 0.0F; ///< 最近一次成功读取和解码的耗时
+    float playbackSpeed_ = 1.0F; ///< 相对媒体帧率的当前播放倍速
+    bool ended_ = false; ///< 最近一次顺序读取是否已经到达文件末尾
+};
+
 /** @brief 将有效 ROI 规范化到当前帧边界，空交集会使其失效 */
 void clampRoiToFrame(AppState &state)
 {
@@ -914,6 +1095,14 @@ void updateConnectionStatus(AppState &state)
         state.connectionStatus = "paused";
         return;
     }
+    if (!state.videoFilePath.empty())
+    {
+        if (state.connectionStatus != "ended")
+        {
+            state.connectionStatus = "playing";
+        }
+        return;
+    }
     if (state.lastFrameTime.time_since_epoch().count() == 0)
     {
         if (state.connectionStatus.rfind("failed:", 0) != 0)
@@ -925,7 +1114,7 @@ void updateConnectionStatus(AppState &state)
     state.connectionStatus = state.frameAgeMs > 2000.0F ? "stale" : "receiving";
 }
 
-/** @brief 清除不能跨端点保留的帧、统计和分析状态 */
+/** @brief 清除不能跨数据源保留的帧、统计和分析状态 */
 void resetStreamState(AppState &state)
 {
     state.connectionStatus = "waiting frames";
@@ -1027,6 +1216,7 @@ int runApplication(const int argc, char **argv)
     ui.init("Frame Visualizer", state);
 
     LatestFrameDecoder frameDecoder;
+    VideoFilePlayer videoPlayer;
 
     std::cout << "Listening on " << state.endpoint << '\n'
               << "Message formats: topic + FrameMeta protobuf + payload, or "
@@ -1038,10 +1228,75 @@ int runApplication(const int argc, char **argv)
     uint64_t endpointGeneration = 0;
     FrameRateTracker frameRates;
     frameRates.reset(std::chrono::steady_clock::now());
+    float appliedPlaybackSpeed = 1.0F;
+
+    const auto closeVideo = [&]
+    {
+        videoPlayer.close();
+        state.videoFilePath.clear();
+        state.videoFrameCount = 0;
+        state.videoFramePosition = 0;
+        state.videoSeekRequested = false;
+        state.videoCloseRequested = false;
+        resetStreamState(state);
+        frameHistory.clear();
+        frameRates.reset(std::chrono::steady_clock::now());
+        ++endpointGeneration;
+        ui.onEndpointChanged(state);
+    };
 
     while (!state.quit)
     {
         ui.processEvents(state);
+        if (state.videoFileOpenRequested)
+        {
+            state.videoFileOpenRequested = false;
+            const std::string requestedPath = std::move(state.requestedVideoFile);
+            state.requestedVideoFile.clear();
+            try
+            {
+                videoPlayer.open(requestedPath);
+                state.videoFilePath = requestedPath;
+                resetStreamState(state);
+                state.videoFilePath = requestedPath;
+                state.sourceId = requestedPath;
+                state.payloadInfo = "local video";
+                state.sourceFps = static_cast<float>(videoPlayer.fps());
+                state.videoFrameCount = videoPlayer.frameCount();
+                state.videoFramePosition = 0;
+                state.videoPlaybackSpeed = 1.0F;
+                state.videoCloseRequested = false;
+                appliedPlaybackSpeed = 1.0F;
+                state.connectionStatus = "playing";
+                frameHistory.clear();
+                frameRates.reset(std::chrono::steady_clock::now());
+                ++endpointGeneration;
+                ui.onEndpointChanged(state);
+                std::cout << "Playing local video " << requestedPath << '\n';
+            }
+            catch (const std::exception &error)
+            {
+                state.connectionStatus = std::string("failed: ") + error.what();
+            }
+        }
+
+        if (state.videoCloseRequested)
+        {
+            if (videoPlayer.isOpen())
+            {
+                closeVideo();
+            }
+            else
+            {
+                state.videoCloseRequested = false;
+            }
+        }
+
+        // 应用端点即明确切回网络输入，即使端点文本没有变化。
+        if (state.endpointChangeRequested && videoPlayer.isOpen())
+        {
+            closeVideo();
+        }
         if (applyEndpointChange(receiver, state))
         {
             ++endpointGeneration;
@@ -1051,8 +1306,12 @@ int runApplication(const int argc, char **argv)
         }
 
         // 主线程只提交接收队列中的最新消息，降低实时预览累积延迟
-        std::vector<ZmqMessage> messages = receiver.receiveLatest();
-        if (!state.paused && !messages.empty())
+        std::vector<ZmqMessage> messages;
+        if (!videoPlayer.isOpen())
+        {
+            messages = receiver.receiveLatest();
+        }
+        if (!videoPlayer.isOpen() && !state.paused && !messages.empty())
         {
             frameDecoder.submit(std::move(messages), endpointGeneration);
         }
@@ -1060,6 +1319,44 @@ int runApplication(const int argc, char **argv)
             decoded && !state.paused && decoded->generation == endpointGeneration)
         {
             acceptDecodedPacket(std::move(*decoded), state, frameHistory, frameRates);
+        }
+
+        if (videoPlayer.isOpen())
+        {
+            if (std::abs(appliedPlaybackSpeed - state.videoPlaybackSpeed) > 0.001F)
+            {
+                videoPlayer.setPlaybackSpeed(state.videoPlaybackSpeed);
+                appliedPlaybackSpeed = state.videoPlaybackSpeed;
+            }
+
+            cv::Mat frame;
+            bool hasFrame = false;
+            if (state.videoSeekRequested)
+            {
+                state.videoSeekRequested = false;
+                hasFrame = videoPlayer.seekTo(state.requestedVideoFrame, frame);
+            }
+            else if (!state.paused)
+            {
+                hasFrame = videoPlayer.readDue(std::chrono::steady_clock::now(), frame);
+            }
+            if (hasFrame)
+            {
+                DecodedPacket packet;
+                packet.frame = std::move(frame);
+                packet.sourceId = state.videoFilePath;
+                packet.payloadInfo = "local video";
+                packet.decodeTimeMs = videoPlayer.decodeTimeMs();
+                acceptDecodedPacket(std::move(packet), state, frameHistory, frameRates);
+                state.sourceFps = static_cast<float>(videoPlayer.fps());
+                state.sourceFrameIndex = videoPlayer.frameIndex();
+                state.videoFramePosition = videoPlayer.frameIndex() == 0 ? 0 :
+                    static_cast<int64_t>(videoPlayer.frameIndex() - 1);
+            }
+            else if (videoPlayer.ended())
+            {
+                state.connectionStatus = "ended";
+            }
         }
 
         // 暂停切换的首轮以最新帧为基准，再应用用户历史导航请求
