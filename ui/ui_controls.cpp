@@ -173,73 +173,116 @@ void UiContext::Impl::drawControlPanel(AppState &state, const ImVec2 &displaySiz
                 state.endpoint.c_str());
         }
 
-        if (ImGui::TreeNodeEx("Details", ImGuiTreeNodeFlags_SpanAvailWidth))
+        const bool automaticCamera = state.sourceLockEnabled && state.autoLockSource;
+        const bool allCameras = !state.sourceLockEnabled;
+        std::string cameraPreview;
+        if (allCameras)
         {
-            ImGui::TextWrapped("Topic: %s", state.topic.empty() ? "*" : state.topic.c_str());
-            ImGui::TextWrapped("Source: %s", state.sourceId.empty() ? "-" : state.sourceId.c_str());
-            ImGui::TextWrapped("Payload: %s",
-                state.payloadInfo.empty() ? "-" : state.payloadInfo.c_str());
-            ImGui::Separator();
-            ImGui::TextDisabled("Source lock");
-            if (ImGui::Checkbox("Filter by source", &state.sourceLockEnabled))
+            cameraPreview = "All cameras (mixed)";
+        }
+        else if (automaticCamera)
+        {
+            cameraPreview = state.lockedSourceId.empty() ? "Auto (waiting)" : "Auto";
+        }
+        else
+        {
+            cameraPreview = state.lockedSourceId.empty() ? "Select a camera" :
+                state.lockedSourceId;
+        }
+
+        ImGui::Spacing();
+        if (ImGui::BeginTable("CameraSelector", 2, ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 120.0F);
+            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("Camera");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.0F);
+            if (ImGui::BeginCombo("##camera_selector", cameraPreview.c_str()))
             {
-                if (!state.sourceLockEnabled)
+                if (ImGui::Selectable("Auto (first available)", automaticCamera) &&
+                    !automaticCamera)
                 {
+                    state.sourceLockEnabled = true;
+                    state.autoLockSource = true;
                     state.lockedSourceId.clear();
-                    state.filteredFrameCount = 0;
+                    state.sourceSelectionChangeRequested = true;
                 }
-            }
-            ImGui::BeginDisabled(!state.sourceLockEnabled);
-            ImGui::Checkbox("Auto-lock first", &state.autoLockSource);
-            {
-                int currentItem = 0;
-                if (state.lockedSourceId.empty())
+                if (automaticCamera)
                 {
-                    currentItem = 0;
+                    ImGui::SetItemDefaultFocus();
                 }
-                else
+
+                if (!state.detectedSources.empty())
                 {
-                    for (std::size_t i = 0; i < state.detectedSources.size(); ++i)
+                    ImGui::Separator();
+                    for (const std::string &source : state.detectedSources)
                     {
-                        if (state.detectedSources[i] == state.lockedSourceId)
+                        const bool selected = state.sourceLockEnabled &&
+                                              !state.autoLockSource &&
+                                              state.lockedSourceId == source;
+                        if (ImGui::Selectable(source.c_str(), selected) && !selected)
                         {
-                            currentItem = static_cast<int>(i) + 1;
-                            break;
-                        }
-                    }
-                }
-                if (ImGui::BeginCombo("Lock to", currentItem == 0 ? "any source" :
-                    state.lockedSourceId.c_str()))
-                {
-                    if (ImGui::Selectable("any source", currentItem == 0))
-                    {
-                        state.lockedSourceId.clear();
-                        state.filteredFrameCount = 0;
-                    }
-                    for (std::size_t i = 0; i < state.detectedSources.size(); ++i)
-                    {
-                        const bool selected = static_cast<int>(i) + 1 == currentItem;
-                        if (ImGui::Selectable(state.detectedSources[i].c_str(), selected))
-                        {
-                            state.lockedSourceId = state.detectedSources[i];
-                            state.filteredFrameCount = 0;
+                            state.sourceLockEnabled = true;
+                            state.autoLockSource = false;
+                            state.lockedSourceId = source;
+                            state.sourceSelectionChangeRequested = true;
                         }
                         if (selected)
                         {
                             ImGui::SetItemDefaultFocus();
                         }
                     }
-                    ImGui::EndCombo();
                 }
+
+                ImGui::Separator();
+                if (ImGui::Selectable("All cameras (mixed)", allCameras) && !allCameras)
+                {
+                    state.sourceLockEnabled = false;
+                    state.autoLockSource = false;
+                    state.lockedSourceId.clear();
+                    state.sourceSelectionChangeRequested = true;
+                }
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("Frames from different cameras may alternate.");
+                }
+                ImGui::EndCombo();
             }
-            if (state.filteredFrameCount > 0)
-            {
-                char filteredText[64];
-                std::snprintf(filteredText, sizeof(filteredText), "%llu frames",
-                    static_cast<unsigned long long>(state.filteredFrameCount));
-                ImGui::TextDisabled("Filtered: %s", filteredText);
-            }
-            ImGui::EndDisabled();
+            ImGui::EndTable();
+        }
+
+        if (state.detectedSources.empty())
+        {
+            ImGui::TextDisabled("Waiting for camera metadata...");
+        }
+        else
+        {
+            ImGui::TextDisabled("%zu camera%s detected", state.detectedSources.size(),
+                state.detectedSources.size() == 1 ? "" : "s");
+        }
+        if (state.filteredFrameCount > 0)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("| %llu filtered",
+                static_cast<unsigned long long>(state.filteredFrameCount));
+        }
+        if (!state.sourceId.empty())
+        {
+            ImGui::TextDisabled("Active:");
+            ImGui::SameLine();
+            ImGui::TextWrapped("%s", state.sourceId.c_str());
+        }
+
+        if (ImGui::TreeNodeEx("Details", ImGuiTreeNodeFlags_SpanAvailWidth))
+        {
+            ImGui::TextWrapped("Topic: %s", state.topic.empty() ? "*" : state.topic.c_str());
+            ImGui::TextWrapped("Source: %s", state.sourceId.empty() ? "-" : state.sourceId.c_str());
+            ImGui::TextWrapped("Payload: %s",
+                state.payloadInfo.empty() ? "-" : state.payloadInfo.c_str());
             ImGui::TreePop();
         }
     }

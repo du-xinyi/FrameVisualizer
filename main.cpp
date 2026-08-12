@@ -22,10 +22,11 @@
 
 #include "frame_meta.pb.h"
 #include "frame_transport/frame_receiver.h"
+#include "frame_transport/source_filter.h"
 #include "ui/ui.h"
 
 /**
- * @brief FrameVisualizer 的消息接收、解码调度与应用主循环
+ * @brief frame-scope 的消息接收、解码调度与应用主循环
  *
  * @details 接收 protobuf 多部分帧及兼容的单部分图像消息，将解码工作交给后台线程，
  * 并在主线程维护历史帧、统计状态和 UI 生命周期
@@ -39,7 +40,7 @@ constexpr std::size_t kFrameHistoryMaxBytes = 256U * 1024U * 1024U; ///< 历史�
 
 
 using ByteSpan = std::span<const unsigned char>;
-using ZmqMessage = frameviz::FrameMessagePart;
+using ZmqMessage = frame_scope::FrameMessagePart;
 
 /** @brief 为 ZMQ 消息数据创建不拥有内存的只读字节视图 */
 ByteSpan messageBytes(const ZmqMessage &message)
@@ -186,7 +187,7 @@ int cvDepthFromBytesPerChannel(const uint32_t bytesPerChannel)
  *
  * @return 可用的 OpenCV Mat 类型，字段不受支持时返回 std::nullopt
  */
-std::optional<int> cvTypeFromImageSpec(const frameviz::ImageSpec &image)
+std::optional<int> cvTypeFromImageSpec(const frame_scope::ImageSpec &image)
 {
     const int depth = cvDepthFromBytesPerChannel(image.bytes_per_channel());
     if (depth < 0 || image.channels() == 0 || image.channels() > CV_CN_MAX)
@@ -208,7 +209,7 @@ std::optional<int> cvTypeFromImageSpec(const frameviz::ImageSpec &image)
  *
  * @return 完成校验和颜色转换的图像，协议字段不受支持时返回 std::nullopt
  */
-std::optional<cv::Mat> decodeRawPayload(const frameviz::FrameMeta &meta,
+std::optional<cv::Mat> decodeRawPayload(const frame_scope::FrameMeta &meta,
                                         const ByteSpan payload)
 {
     if (payload.size() > kMaxPayloadBytes)
@@ -246,39 +247,39 @@ std::optional<cv::Mat> decodeRawPayload(const frameviz::FrameMeta &meta,
     int colorConversion = -1;
     switch (image.pixel_format())
     {
-    case frameviz::PIXEL_FORMAT_RGB8:
+    case frame_scope::PIXEL_FORMAT_RGB8:
         if (channels != 3 || bytesPerChannel != 1)
         {
             return std::nullopt;
         }
         colorConversion = cv::COLOR_RGB2BGR;
         break;
-    case frameviz::PIXEL_FORMAT_RGBA8:
+    case frame_scope::PIXEL_FORMAT_RGBA8:
         if (channels != 4 || bytesPerChannel != 1)
         {
             return std::nullopt;
         }
         colorConversion = cv::COLOR_RGBA2BGRA;
         break;
-    case frameviz::PIXEL_FORMAT_BGR8:
+    case frame_scope::PIXEL_FORMAT_BGR8:
         if (channels != 3 || bytesPerChannel != 1)
         {
             return std::nullopt;
         }
         break;
-    case frameviz::PIXEL_FORMAT_BGRA8:
+    case frame_scope::PIXEL_FORMAT_BGRA8:
         if (channels != 4 || bytesPerChannel != 1)
         {
             return std::nullopt;
         }
         break;
-    case frameviz::PIXEL_FORMAT_GRAY8:
+    case frame_scope::PIXEL_FORMAT_GRAY8:
         if (channels != 1 || bytesPerChannel != 1)
         {
             return std::nullopt;
         }
         break;
-    case frameviz::PIXEL_FORMAT_UNSPECIFIED:
+    case frame_scope::PIXEL_FORMAT_UNSPECIFIED:
         break;
     default:
         return std::nullopt;
@@ -309,14 +310,14 @@ std::optional<cv::Mat> decodeRawPayload(const frameviz::FrameMeta &meta,
 }
 
 /** @brief 根据 FrameMeta 负载编码选择压缩或原始图像解码路径 */
-std::optional<cv::Mat> decodeProtoPayload(const frameviz::FrameMeta &meta,
+std::optional<cv::Mat> decodeProtoPayload(const frame_scope::FrameMeta &meta,
                                           const ByteSpan payload)
 {
     switch (meta.payload().encoding())
     {
-    case frameviz::PAYLOAD_ENCODING_JPEG:
+    case frame_scope::PAYLOAD_ENCODING_JPEG:
         return decodeEncodedImage(payload);
-    case frameviz::PAYLOAD_ENCODING_RAW:
+    case frame_scope::PAYLOAD_ENCODING_RAW:
         return decodeRawPayload(meta, payload);
     default:
         return std::nullopt;
@@ -324,35 +325,35 @@ std::optional<cv::Mat> decodeProtoPayload(const frameviz::FrameMeta &meta,
 }
 
 /** @brief 生成人类可读的编码、尺寸和像素格式摘要 */
-std::string payloadDescription(const frameviz::FrameMeta &meta)
+std::string payloadDescription(const frame_scope::FrameMeta &meta)
 {
     std::ostringstream stream;
-    stream << frameviz::PayloadEncoding_Name(meta.payload().encoding()) << " "
+    stream << frame_scope::PayloadEncoding_Name(meta.payload().encoding()) << " "
            << meta.image().width() << "x" << meta.image().height() << " "
-           << frameviz::PixelFormat_Name(meta.image().pixel_format());
+           << frame_scope::PixelFormat_Name(meta.image().pixel_format());
     return stream.str();
 }
 
 /** @brief 将协议像素格式转换为界面使用的短名称 */
-std::string pixelFormatName(const frameviz::PixelFormat format)
+std::string pixelFormatName(const frame_scope::PixelFormat format)
 {
     switch (format)
     {
-    case frameviz::PIXEL_FORMAT_BGR8:
+    case frame_scope::PIXEL_FORMAT_BGR8:
         return "BGR8";
-    case frameviz::PIXEL_FORMAT_RGB8:
+    case frame_scope::PIXEL_FORMAT_RGB8:
         return "RGB8";
-    case frameviz::PIXEL_FORMAT_GRAY8:
+    case frame_scope::PIXEL_FORMAT_GRAY8:
         return "GRAY8";
-    case frameviz::PIXEL_FORMAT_NV12:
+    case frame_scope::PIXEL_FORMAT_NV12:
         return "NV12";
-    case frameviz::PIXEL_FORMAT_YUV420P:
+    case frame_scope::PIXEL_FORMAT_YUV420P:
         return "YUV420P";
-    case frameviz::PIXEL_FORMAT_BGRA8:
+    case frame_scope::PIXEL_FORMAT_BGRA8:
         return "BGRA8";
-    case frameviz::PIXEL_FORMAT_RGBA8:
+    case frame_scope::PIXEL_FORMAT_RGBA8:
         return "RGBA8";
-    case frameviz::PIXEL_FORMAT_UNSPECIFIED:
+    case frame_scope::PIXEL_FORMAT_UNSPECIFIED:
         return "Unspecified";
     default:
         return "Unknown";
@@ -368,7 +369,7 @@ std::string pixelFormatName(const frameviz::PixelFormat format)
  * @param meta 最近采用帧的协议元数据
  * @param state 接收源信息、序号和延迟统计的应用状态
  */
-void updateFrameMetadata(const frameviz::FrameMeta &meta, AppState &state)
+void updateFrameMetadata(const frame_scope::FrameMeta &meta, AppState &state)
 {
     if (state.sourceSessionId != meta.session_id())
     {
@@ -392,14 +393,14 @@ void updateFrameMetadata(const frameviz::FrameMeta &meta, AppState &state)
 
     const uint64_t captureNs = meta.timing().capture_timestamp_ns();
     uint64_t nowNs = 0;
-    if (meta.timing().capture_timestamp_domain() == frameviz::TIMESTAMP_DOMAIN_MONOTONIC)
+    if (meta.timing().capture_timestamp_domain() == frame_scope::TIMESTAMP_DOMAIN_MONOTONIC)
     {
         nowNs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                           std::chrono::steady_clock::now().time_since_epoch())
                                           .count());
     }
     else if (meta.timing().capture_timestamp_domain() ==
-             frameviz::TIMESTAMP_DOMAIN_UNIX_EPOCH)
+             frame_scope::TIMESTAMP_DOMAIN_UNIX_EPOCH)
     {
         nowNs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                           std::chrono::system_clock::now().time_since_epoch())
@@ -431,7 +432,7 @@ struct DecodedPacket
     std::string topic; ///< 多部分协议携带的订阅主题
     std::string sourceId; ///< protobuf 发布源标识
     std::string payloadInfo; ///< 用于状态面板的负载摘要
-    std::optional<frameviz::FrameMeta> meta; ///< 传统消息不存在的可选协议元数据
+    std::optional<frame_scope::FrameMeta> meta; ///< 传统消息不存在的可选协议元数据
 
     // === 解码调度 ===
     float decodeTimeMs = 0.0F; ///< 后台线程本次解码耗时
@@ -455,7 +456,7 @@ std::optional<DecodedPacket> decodeReceivedMessages(const std::vector<ZmqMessage
     // 三段及以上消息优先按 topic、FrameMeta、payload 协议解析
     if (messages.size() >= 3)
     {
-        frameviz::FrameMeta meta;
+        frame_scope::FrameMeta meta;
         const auto &metaPart = messages[1];
         if (metaPart.size() <= static_cast<std::size_t>(std::numeric_limits<int>::max()) &&
             meta.ParseFromArray(metaPart.data(), static_cast<int>(metaPart.size())))
@@ -492,6 +493,34 @@ std::optional<DecodedPacket> decodeReceivedMessages(const std::vector<ZmqMessage
     packet.frame = std::move(*decoded);
     packet.payloadInfo = "legacy single-part";
     return packet;
+}
+
+/**
+ * @brief 只解析轻量元数据并在复制图像负载前完成发布源选择
+ *
+ * @param header 接收器已读取的 topic 和 protobuf 元数据视图
+ * @param state 提供源锁定配置并接收已发现源
+ *
+ * @return 当前消息是否应复制 payload 并提交后台解码
+ */
+bool shouldReceiveSource(const frame_scope::FrameMessageHeaderView &header, AppState &state)
+{
+    std::string_view sourceId;
+    frame_scope::FrameMeta meta;
+    if (header.metadata.size() <= static_cast<std::size_t>(std::numeric_limits<int>::max()) &&
+        meta.ParseFromArray(header.metadata.data(), static_cast<int>(header.metadata.size())))
+    {
+        sourceId = meta.source_id();
+    }
+
+    const auto decision = frame_scope::evaluateSourceFilter(
+        sourceId, state.sourceLockEnabled, state.autoLockSource, state.lockedSourceId,
+        state.detectedSources);
+    if (decision.autoLocked)
+    {
+        std::cout << "Auto-locked to source: " << state.lockedSourceId << '\n';
+    }
+    return decision.accepted;
 }
 
 /**
@@ -1150,6 +1179,23 @@ void resetStreamState(AppState &state)
     state.lastFrame.release();
 }
 
+/** @brief 切换摄像头时清除旧源画面和统计，同时保留已发现源与选择模式 */
+void resetSelectedSourceState(AppState &state)
+{
+    const bool sourceLockEnabled = state.sourceLockEnabled;
+    const bool autoLockSource = state.autoLockSource;
+    std::string lockedSourceId = std::move(state.lockedSourceId);
+    std::vector<std::string> detectedSources = std::move(state.detectedSources);
+
+    resetStreamState(state);
+
+    state.sourceLockEnabled = sourceLockEnabled;
+    state.autoLockSource = autoLockSource;
+    state.lockedSourceId = std::move(lockedSourceId);
+    state.detectedSources = std::move(detectedSources);
+    state.sourceSelectionChangeRequested = false;
+}
+
 /**
  * @brief 尝试以新套接字替换当前订阅连接
  *
@@ -1161,7 +1207,7 @@ void resetStreamState(AppState &state)
  *
  * @return 端点实际发生切换时返回 true
  */
-bool applyEndpointChange(frameviz::FrameReceiver &receiver, AppState &state)
+bool applyEndpointChange(frame_scope::FrameReceiver &receiver, AppState &state)
 {
     if (!state.endpointChangeRequested)
     {
@@ -1196,7 +1242,7 @@ bool applyEndpointChange(frameviz::FrameReceiver &receiver, AppState &state)
 }
 
 /**
- * @brief 运行 FrameVisualizer 应用生命周期
+ * @brief 运行 frame-scope 应用生命周期
  *
  * @details 初始化帧接收器、后台解码器和桌面 UI，在主循环中处理端点切换、最新帧
  * 接收、暂停历史浏览、统计刷新、ROI 分析与渲染。循环在 UI 请求退出后结束
@@ -1214,12 +1260,12 @@ int runApplication(const int argc, char **argv)
     state.endpoint = parseEndpoint(argc, argv);
     state.connectionStatus = "waiting frames";
 
-    frameviz::FrameReceiverOptions receiverOptions;
+    frame_scope::FrameReceiverOptions receiverOptions;
     receiverOptions.endpoint = state.endpoint;
-    frameviz::FrameReceiver receiver(std::move(receiverOptions));
+    frame_scope::FrameReceiver receiver(std::move(receiverOptions));
 
     UiContext ui;
-    ui.init("Frame Visualizer", state);
+    ui.init("frame-scope", state);
 
     LatestFrameDecoder frameDecoder;
     VideoFilePlayer videoPlayer;
@@ -1254,6 +1300,14 @@ int runApplication(const int argc, char **argv)
     while (!state.quit)
     {
         ui.processEvents(state);
+        if (state.sourceSelectionChangeRequested && !videoPlayer.isOpen())
+        {
+            resetSelectedSourceState(state);
+            frameHistory.clear();
+            frameRates.reset(std::chrono::steady_clock::now());
+            ++endpointGeneration;
+            ui.onEndpointChanged(state);
+        }
         if (state.videoFileOpenRequested)
         {
             state.videoFileOpenRequested = false;
@@ -1312,35 +1366,28 @@ int runApplication(const int argc, char **argv)
         }
 
         // 主线程只提交接收队列中的最新消息，降低实时预览累积延迟
-        std::vector<ZmqMessage> messages;
+        frame_scope::FrameReceiveResult receiveResult;
         if (!videoPlayer.isOpen())
         {
-            messages = receiver.receiveLatest();
+            receiveResult = receiver.receiveLatest(
+                [&state](const frame_scope::FrameMessageHeaderView &header)
+                {
+                    return shouldReceiveSource(header, state);
+                });
+            state.filteredFrameCount += receiveResult.filteredMessages;
         }
-        if (!videoPlayer.isOpen() && !state.paused && !messages.empty())
+        if (!videoPlayer.isOpen() && !state.paused && !receiveResult.message.empty())
         {
-            frameDecoder.submit(std::move(messages), endpointGeneration);
+            frameDecoder.submit(std::move(receiveResult.message), endpointGeneration);
         }
         if (auto decoded = frameDecoder.poll();
             decoded && !state.paused && decoded->generation == endpointGeneration)
         {
             if (state.sourceLockEnabled)
             {
-                if (!decoded->sourceId.empty())
-                {
-                    if (std::find(state.detectedSources.begin(), state.detectedSources.end(),
-                                  decoded->sourceId) == state.detectedSources.end())
-                    {
-                        state.detectedSources.push_back(decoded->sourceId);
-                    }
-                }
-                if (state.lockedSourceId.empty() && state.autoLockSource && !decoded->sourceId.empty())
-                {
-                    state.lockedSourceId = decoded->sourceId;
-                    std::cout << "Auto-locked to source: " << state.lockedSourceId << '\n';
-                }
                 if (!state.lockedSourceId.empty() && decoded->sourceId != state.lockedSourceId)
                 {
+                    // 源选择可能在后台任务执行期间改变，最终采用前再做一次低成本校验。
                     ++state.filteredFrameCount;
                 }
                 else
@@ -1426,7 +1473,7 @@ int runApplication(const int argc, char **argv)
 }
 
 /**
- * @brief FrameVisualizer 进程入口
+ * @brief frame-scope 进程入口
  *
  * @details 将应用生命周期抛出的标准异常转换为错误日志和非零进程退出码
  *
@@ -1443,7 +1490,7 @@ int main(const int argc, char **argv)
     }
     catch (const std::exception &error)
     {
-        std::cerr << "FrameVisualizer failed: " << error.what() << '\n';
+        std::cerr << "frame-scope failed: " << error.what() << '\n';
         return 1;
     }
 }

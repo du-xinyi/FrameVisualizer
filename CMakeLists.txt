@@ -1,14 +1,24 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(
-    FrameVisualizer
+    frame-scope
     VERSION 1.0.0
-    DESCRIPTION "Real-time OpenCV frame stream visualizer"
+    DESCRIPTION "OpenCV video and real-time frame analysis tool"
     LANGUAGES CXX
 )
 
-option(FRAMEVISUALIZER_BUILD_APP "Build the FrameVisualizer desktop application" ON)
-option(FRAMEVISUALIZER_BUILD_TOOLS "Build FrameVisualizer helper tools" ON)
+option(
+    FRAME_SCOPE_BUILD_APP
+    "Build the frame-scope desktop application"
+    ON
+)
+option(
+    FRAME_SCOPE_BUILD_TOOLS
+    "Build frame-scope helper tools"
+    ON
+)
+option(FRAME_SCOPE_BUILD_TESTS "Build frame-scope tests" OFF)
+option(FRAME_SCOPE_BUILD_BENCHMARKS "Build frame-scope performance benchmarks" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -17,20 +27,20 @@ include(ProjectDependencies)
 include(ProtobufGeneration)
 
 # --- FrameProtocol ---
-set(FRAMEVISUALIZER_PROTO_FILE "${PROJECT_SOURCE_DIR}/proto/frame_meta.proto")
-framevisualizer_generate_protobuf(
-    PROTO "${FRAMEVISUALIZER_PROTO_FILE}"
-    OUT_SOURCES FRAMEVISUALIZER_PROTO_SOURCES
-    OUT_HEADERS FRAMEVISUALIZER_PROTO_HEADERS
+set(FRAME_SCOPE_PROTO_FILE "${PROJECT_SOURCE_DIR}/proto/frame_meta.proto")
+frame_scope_generate_protobuf(
+    PROTO "${FRAME_SCOPE_PROTO_FILE}"
+    OUT_SOURCES FRAME_SCOPE_PROTO_SOURCES
+    OUT_HEADERS FRAME_SCOPE_PROTO_HEADERS
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
 )
 
 add_library(
     FrameProtocol SHARED
-    ${FRAMEVISUALIZER_PROTO_SOURCES}
-    ${FRAMEVISUALIZER_PROTO_HEADERS}
+    ${FRAME_SCOPE_PROTO_SOURCES}
+    ${FRAME_SCOPE_PROTO_HEADERS}
 )
-add_library(FrameVisualizer::Protocol ALIAS FrameProtocol)
+add_library(FrameScope::Protocol ALIAS FrameProtocol)
 
 target_compile_features(FrameProtocol PUBLIC cxx_std_20)
 target_include_directories(FrameProtocol PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
@@ -44,11 +54,11 @@ add_custom_command(
         "${CMAKE_BINARY_DIR}/include/protoc"
     COMMAND
         "${CMAKE_COMMAND}" -E copy_if_different
-        "${FRAMEVISUALIZER_PROTO_HEADERS}"
+        "${FRAME_SCOPE_PROTO_HEADERS}"
         "${CMAKE_BINARY_DIR}/include/protoc/"
     COMMAND
         "${CMAKE_COMMAND}" -E copy_if_different
-        "${FRAMEVISUALIZER_PROTO_FILE}"
+        "${FRAME_SCOPE_PROTO_FILE}"
         "${CMAKE_BINARY_DIR}/include/protoc/"
     VERBATIM
 )
@@ -74,7 +84,7 @@ add_library(
     frame_transport/frame_sender.cpp
     frame_transport/frame_sender.h
 )
-add_library(FrameVisualizer::FrameSender ALIAS FrameSender)
+add_library(FrameScope::FrameSender ALIAS FrameSender)
 
 target_include_directories(FrameSender PUBLIC "${PROJECT_SOURCE_DIR}")
 target_link_libraries(
@@ -82,7 +92,7 @@ target_link_libraries(
     PUBLIC
         PkgConfig::OPENCV
     PRIVATE
-        FrameVisualizer::Protocol
+        FrameScope::Protocol
         FrameZmqSupport
 )
 
@@ -99,14 +109,16 @@ add_custom_command(
     VERBATIM
 )
 
-# --- FrameVisualizer desktop application ---
-if(FRAMEVISUALIZER_BUILD_APP)
+# --- frame-scope desktop application ---
+if(FRAME_SCOPE_BUILD_APP)
     add_library(
         FrameReceiver SHARED
         frame_transport/frame_receiver.cpp
         frame_transport/frame_receiver.h
+        frame_transport/source_filter.cpp
+        frame_transport/source_filter.h
     )
-    add_library(FrameVisualizer::FrameReceiver ALIAS FrameReceiver)
+    add_library(FrameScope::FrameReceiver ALIAS FrameReceiver)
 
     target_include_directories(FrameReceiver PUBLIC "${PROJECT_SOURCE_DIR}")
     target_link_libraries(FrameReceiver PRIVATE FrameZmqSupport)
@@ -120,12 +132,13 @@ if(FRAMEVISUALIZER_BUILD_APP)
         COMMAND
             "${CMAKE_COMMAND}" -E copy_if_different
             "${PROJECT_SOURCE_DIR}/frame_transport/frame_receiver.h"
+            "${PROJECT_SOURCE_DIR}/frame_transport/source_filter.h"
             "${CMAKE_BINARY_DIR}/include/frame_transport/"
         VERBATIM
     )
 
     set(
-        FRAMEVISUALIZER_IMGUI_SOURCES
+        FRAME_SCOPE_IMGUI_SOURCES
         third_party/imgui/imgui.cpp
         third_party/imgui/imgui_draw.cpp
         third_party/imgui/imgui_tables.cpp
@@ -136,18 +149,18 @@ if(FRAMEVISUALIZER_BUILD_APP)
     # ImGui 是内置第三方源码，不继承项目的严格告警策略。
     if(MSVC)
         set_source_files_properties(
-            ${FRAMEVISUALIZER_IMGUI_SOURCES}
+            ${FRAME_SCOPE_IMGUI_SOURCES}
             PROPERTIES COMPILE_OPTIONS /w
         )
     else()
         set_source_files_properties(
-            ${FRAMEVISUALIZER_IMGUI_SOURCES}
+            ${FRAME_SCOPE_IMGUI_SOURCES}
             PROPERTIES COMPILE_OPTIONS -w
         )
     endif()
 
     add_library(
-        FrameVisualizerUi SHARED
+        FrameScopeUi SHARED
         ui/async_image_saver.cpp
         ui/async_image_saver.h
         ui/ui.cpp
@@ -164,19 +177,19 @@ if(FRAMEVISUALIZER_BUILD_APP)
         ui/ui_viewport.cpp
         platform/keyboard_listener.cpp
         platform/keyboard_listener.h
-        ${FRAMEVISUALIZER_IMGUI_SOURCES}
+        ${FRAME_SCOPE_IMGUI_SOURCES}
     )
-    add_library(FrameVisualizer::Ui ALIAS FrameVisualizerUi)
+    add_library(FrameScope::Ui ALIAS FrameScopeUi)
 
     target_include_directories(
-        FrameVisualizerUi
+        FrameScopeUi
         PUBLIC
             "${PROJECT_SOURCE_DIR}"
         PRIVATE
             "${PROJECT_SOURCE_DIR}/third_party/imgui"
     )
     target_link_libraries(
-        FrameVisualizerUi
+        FrameScopeUi
         PUBLIC
             PkgConfig::OPENCV
         PRIVATE
@@ -185,7 +198,7 @@ if(FRAMEVISUALIZER_BUILD_APP)
     )
 
     add_custom_command(
-        TARGET FrameVisualizerUi
+        TARGET FrameScopeUi
         POST_BUILD
         COMMAND
             "${CMAKE_COMMAND}" -E make_directory
@@ -197,22 +210,56 @@ if(FRAMEVISUALIZER_BUILD_APP)
         VERBATIM
     )
 
-    add_executable(FrameVisualizer main.cpp)
+    add_executable(frame-scope main.cpp)
     target_link_libraries(
-        FrameVisualizer
+        frame-scope
         PRIVATE
-            FrameVisualizer::Ui
-            FrameVisualizer::Protocol
-            FrameVisualizer::FrameReceiver
+            FrameScope::Ui
+            FrameScope::Protocol
+            FrameScope::FrameReceiver
     )
+
+    if(FRAME_SCOPE_BUILD_TESTS)
+        enable_testing()
+        find_package(GTest REQUIRED)
+        include(GoogleTest)
+
+        add_executable(
+            FrameReceiverTests
+            tests/frame_receiver_test.cpp
+        )
+        target_link_libraries(
+            FrameReceiverTests
+            PRIVATE
+                FrameScope::FrameReceiver
+                FrameScope::Protocol
+                FrameZmqSupport
+                GTest::gtest_main
+        )
+        gtest_discover_tests(FrameReceiverTests)
+    endif()
+
+    if(FRAME_SCOPE_BUILD_BENCHMARKS)
+        add_executable(
+            MultiSourceReceiverBenchmark
+            benchmarks/multi_source_receiver_benchmark.cpp
+        )
+        target_link_libraries(
+            MultiSourceReceiverBenchmark
+            PRIVATE
+                FrameScope::FrameReceiver
+                FrameScope::Protocol
+                FrameZmqSupport
+        )
+    endif()
 endif()
 
 # --- SyntheticFramePublisher ---
-if(FRAMEVISUALIZER_BUILD_TOOLS)
+if(FRAME_SCOPE_BUILD_TOOLS)
     add_executable(SyntheticFramePublisher synthetic_frame_publisher.cpp)
     target_link_libraries(
         SyntheticFramePublisher
         PRIVATE
-            FrameVisualizer::FrameSender
+            FrameScope::FrameSender
     )
 endif()

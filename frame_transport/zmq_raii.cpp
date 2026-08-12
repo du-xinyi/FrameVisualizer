@@ -3,7 +3,7 @@
 #include <cerrno>
 #include <utility>
 
-namespace frameviz::zmq
+namespace frame_scope::zmq
 {
     std::runtime_error lastError(const std::string_view operation)
     {
@@ -161,4 +161,4 @@ namespace frameviz::zmq
     {
         return zmq_msg_more(&message_) != 0;
     }
-} // namespace frameviz::zmq_c
+} // namespace frame_scope::zmq_c

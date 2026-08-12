@@ -24,13 +24,13 @@ if(NOT TARGET protobuf::protoc AND NOT Protobuf_PROTOC_EXECUTABLE)
     message(FATAL_ERROR "Protobuf compiler 'protoc' was not found")
 endif()
 
-if(FRAMEVISUALIZER_BUILD_APP)
+if(FRAME_SCOPE_BUILD_APP)
     pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
     pkg_check_modules(OPENGL REQUIRED IMPORTED_TARGET gl)
 endif()
 
 message(
     STATUS
-    "FrameVisualizer dependencies: OpenCV ${OPENCV_VERSION}, "
+    "frame-scope dependencies: OpenCV ${OPENCV_VERSION}, "
     "ZeroMQ ${LIBZMQ_VERSION}, Protobuf ${Protobuf_VERSION}"
 )

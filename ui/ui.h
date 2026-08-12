@@ -113,11 +113,12 @@ struct AppState
     std::chrono::steady_clock::time_point lastFrameTime{}; ///< 最近成功采用一帧的本地时刻
 
     // === 源锁定 ===
-    bool sourceLockEnabled = false; ///< 是否启用源过滤，仅接收指定源的数据
+    bool sourceLockEnabled = true; ///< 是否启用源过滤，仅接收指定源的数据
     bool autoLockSource = true; ///< 首次收到帧时自动锁定到该源
     std::string lockedSourceId; ///< 当前锁定的发布源标识；为空时接受所有源
     std::vector<std::string> detectedSources; ///< 锁定模式下发现的所有源标识
     uint64_t filteredFrameCount = 0; ///< 锁定模式下被过滤的其他源帧数
+    bool sourceSelectionChangeRequested = false; ///< Camera 控件是否请求重置当前源画面
 
     // === 流元数据 ===
     std::string topic; ///< 最近采用消息的 ZMQ 主题

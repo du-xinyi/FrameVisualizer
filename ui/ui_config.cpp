@@ -14,8 +14,8 @@ namespace
     constexpr int kMaxWindowDimension = 16'384; ///< 防止损坏配置生成异常窗口尺寸的上界
     constexpr float kMinControlPanelRatio = 0.1F; ///< 持久化控制区宽度比例下界
     constexpr float kMaxControlPanelRatio = 0.45F; ///< 持久化控制区宽度比例上界
-    constexpr auto kConfigPath = ".framevis.cfg"; ///< 当前工作目录中的正式配置文件
-    constexpr auto kTemporaryConfigPath = ".framevis.cfg.tmp"; ///< 替换正式文件前的完整临时配置
+    constexpr auto kConfigPath = ".frame-scope.cfg"; ///< 当前工作目录中的正式配置文件
+    constexpr auto kTemporaryConfigPath = ".frame-scope.cfg.tmp"; ///< 替换正式文件前的完整临时配置
 
     /** @brief 将非有限值和越界配置恢复到应用支持范围 */
     void sanitizeConfig(UiConfig &config)

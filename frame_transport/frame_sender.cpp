@@ -15,7 +15,7 @@
 #include "frame_meta.pb.h"
 #include "frame_transport/zmq_raii.h"
 
-namespace frameviz
+namespace frame_scope
 {
     namespace
     {
@@ -429,4 +429,4 @@ namespace frameviz
         static constexpr std::string empty;
         return impl_ ? impl_->endpoint() : empty;
     }
-} // namespace frameviz
+} // namespace frame_scope

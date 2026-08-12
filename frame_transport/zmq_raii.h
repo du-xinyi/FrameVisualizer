@@ -7,7 +7,7 @@
 
 #include <zmq.h>
 
-namespace frameviz::zmq
+namespace frame_scope::zmq
 {
     /**
      * @brief 将 libzmq 最近一次错误转换为包含操作上下文的异常
@@ -255,4 +255,4 @@ namespace frameviz::zmq
 
         zmq_msg_t message_{}; ///< 当前对象独占且已初始化的 libzmq 消息
     };
-} // namespace frameviz::zmq_c
+} // namespace frame_scope::zmq_c

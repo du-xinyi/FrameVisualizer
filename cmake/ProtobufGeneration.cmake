@@ -2,13 +2,13 @@ include_guard(GLOBAL)
 
 # 为单个 .proto 文件生成 C++ 源码。
 #
-# framevisualizer_generate_protobuf(
+# frame_scope_generate_protobuf(
 #     PROTO <file>
 #     OUT_SOURCES <variable>
 #     OUT_HEADERS <variable>
 #     [OUTPUT_DIRECTORY <directory>]
 # )
-function(framevisualizer_generate_protobuf)
+function(frame_scope_generate_protobuf)
     cmake_parse_arguments(
         PARSE_ARGV 0
         ARG
@@ -20,7 +20,7 @@ function(framevisualizer_generate_protobuf)
     if(ARG_UNPARSED_ARGUMENTS)
         message(
             FATAL_ERROR
-            "framevisualizer_generate_protobuf received unknown arguments: "
+            "frame_scope_generate_protobuf received unknown arguments: "
             "${ARG_UNPARSED_ARGUMENTS}"
         )
     endif()
@@ -29,7 +29,7 @@ function(framevisualizer_generate_protobuf)
         if(NOT ARG_${_required_argument})
             message(
                 FATAL_ERROR
-                "framevisualizer_generate_protobuf requires ${_required_argument}"
+                "frame_scope_generate_protobuf requires ${_required_argument}"
             )
         endif()
     endforeach()

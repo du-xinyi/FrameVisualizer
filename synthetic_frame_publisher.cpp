@@ -120,14 +120,14 @@ int main(const int argc, char **argv)
 {
     const std::string endpoint = parseEndpoint(argc, argv);
 
-    frameviz::FrameSenderOptions options;
+    frame_scope::FrameSenderOptions options;
     options.endpoint = endpoint;
     options.topic = kTopic;
     options.sourceId = "simulated-camera-0";
     options.sessionId = "local-simulation";
-    options.encoding = frameviz::FrameEncoding::Jpeg;
+    options.encoding = frame_scope::FrameEncoding::Jpeg;
     options.jpegQuality = 90;
-    frameviz::FrameSender sender(std::move(options));
+    frame_scope::FrameSender sender(std::move(options));
 
     std::cout << "Publishing simulated stream on " << endpoint << '\n'
               << "Topic: " << kTopic << std::endl;
@@ -142,10 +142,10 @@ int main(const int argc, char **argv)
     for (;;)
     {
         const cv::Mat frame = makeFrame(frameIndex);
-        frameviz::FrameInfo info;
+        frame_scope::FrameInfo info;
         info.frameIndex = frameIndex;
         info.sourceFps = kFps;
-        const frameviz::FrameSendResult result = sender.publish(frame, info);
+        const frame_scope::FrameSendResult result = sender.publish(frame, info);
 
         if (frameIndex % 30 == 0)
         {

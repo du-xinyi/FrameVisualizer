@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package frameviz;
+package frame_scope;
 
 // FrameMeta 可作为 ZMQ 多部分消息的第二段
 // ZMQ 分段顺序固定为 topic、FrameMeta、图像负载

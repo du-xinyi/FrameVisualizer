@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/FrameVisualizer.iml" filepath="$PROJECT_DIR$/.idea/FrameVisualizer.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/frame-scope.iml" filepath="$PROJECT_DIR$/.idea/frame-scope.iml" />
     </modules>
   </component>
 </project>

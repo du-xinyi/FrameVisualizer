@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <exception>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -10,17 +11,27 @@
 
 #include "frame_transport/zmq_raii.h"
 
-namespace frameviz
+namespace frame_scope
 {
     namespace
     {
         /**
-         * @brief 已从 libzmq 消息内存复制出的单个消息段及其后续段标记
+         * @brief 单个消息段的可选副本、线路大小及其后续段标记
          */
         struct ReceivedPart
         {
             FrameMessagePart bytes; ///< 当前消息段的独立字节存储
             bool more = false; ///< 当前 multipart 消息是否还有后续段
+            std::size_t size = 0; ///< 线路消息段大小，包括未复制段
+        };
+
+        /** @brief 单条 multipart 消息的接收和过滤结果 */
+        struct ReceivedMultipart
+        {
+            MultipartFrameMessage messages; ///< 通过过滤时保存的消息段
+            bool received = false; ///< 是否从 socket 收到了第一段
+            bool accepted = false; ///< 过滤器是否接受当前消息
+            std::size_t copiedPayloadBytes = 0; ///< 实际复制的第三段及后续段字节数
         };
 
         /**
@@ -72,16 +83,18 @@ namespace frameviz
         }
 
         /**
-         * @brief 接收并复制一个消息段
+         * @brief 接收一个消息段，并按需复制其负载
          *
          * @param socket 接收消息的 SUB socket
          * @param flags libzmq 接收标志
+         * @param copyBytes 是否将消息内容复制到独立存储
          *
          * @return 接收的数据和后续段标记；无可用数据或等待超时时返回 std::nullopt
          *
          * @throws std::runtime_error 除 EAGAIN 外的 libzmq 接收错误
          */
-        std::optional<ReceivedPart> receivePart(zmq::Socket &socket, const int flags)
+        std::optional<ReceivedPart> receivePart(zmq::Socket &socket, const int flags,
+                                                const bool copyBytes)
         {
             zmq::Message message;
             if (message.receive(socket, flags) < 0)
@@ -95,10 +108,14 @@ namespace frameviz
 
             // 消息内容必须脱离 zmq_msg_t 生命周期，才能安全提交给后台解码线程
             ReceivedPart part;
-            part.bytes.resize(message.size());
-            if (!part.bytes.empty())
+            part.size = message.size();
+            if (copyBytes)
             {
-                std::memcpy(part.bytes.data(), message.data(), part.bytes.size());
+                part.bytes.resize(part.size);
+                if (!part.bytes.empty())
+                {
+                    std::memcpy(part.bytes.data(), message.data(), part.bytes.size());
+                }
             }
             part.more = message.more();
 
@@ -112,30 +129,72 @@ namespace frameviz
          *
          * @param socket 接收消息的 SUB socket
          *
-         * @return 保持线路顺序的消息段；当前无消息时返回空集合
+         * @return 当前消息是否存在、是否通过过滤以及通过时的独立消息段副本
          */
-        MultipartFrameMessage receiveMultipart(zmq::Socket &socket)
+        ReceivedMultipart receiveMultipart(zmq::Socket &socket,
+                                            const FrameMessageFilter &filter)
         {
-            MultipartFrameMessage messages;
-            auto part = receivePart(socket, ZMQ_DONTWAIT);
+            ReceivedMultipart result;
+            auto part = receivePart(socket, ZMQ_DONTWAIT, true);
             if (!part)
             {
-                return messages;
+                return result;
+            }
+            result.received = true;
+
+            result.messages.reserve(3);
+            result.messages.push_back(std::move(part->bytes));
+            if (part->more)
+            {
+                part = receivePart(socket, 0, true);
+                if (part)
+                {
+                    result.messages.push_back(std::move(part->bytes));
+                }
             }
 
-            messages.reserve(3);
-            messages.push_back(std::move(part->bytes));
-            while (part->more)
+            const FrameMessageHeaderView header{
+                result.messages.front(),
+                result.messages.size() >= 2 ?
+                    std::span<const unsigned char>(result.messages[1]) :
+                    std::span<const unsigned char>{}
+            };
+            std::exception_ptr filterError;
+            try
             {
-                part = receivePart(socket, 0);
+                result.accepted = !filter || filter(header);
+            }
+            catch (...)
+            {
+                // 先排空剩余段以恢复下一条消息的边界，再把回调异常交还调用方。
+                result.accepted = false;
+                filterError = std::current_exception();
+            }
+
+            while (part && part->more)
+            {
+                part = receivePart(socket, 0, result.accepted);
                 if (!part)
                 {
                     break;
                 }
-                messages.push_back(std::move(part->bytes));
+                if (result.accepted)
+                {
+                    result.copiedPayloadBytes += part->size;
+                    result.messages.push_back(std::move(part->bytes));
+                }
             }
 
-            return messages;
+            if (filterError)
+            {
+                std::rethrow_exception(filterError);
+            }
+
+            if (!result.accepted)
+            {
+                result.messages.clear();
+            }
+            return result;
         }
     } // namespace
 
@@ -151,20 +210,29 @@ namespace frameviz
         {
         }
 
-        MultipartFrameMessage receiveLatest()
+        FrameReceiveResult receiveLatest(const FrameMessageFilter &filter)
         {
-            MultipartFrameMessage latest;
+            FrameReceiveResult result;
             // 用新消息持续覆盖结果，在有界工作量内尽量追赶实时流
             for (std::size_t i = 0; i < options_.maxMessagesToDrain; ++i)
             {
-                MultipartFrameMessage messages = receiveMultipart(socket_);
-                if (messages.empty())
+                ReceivedMultipart received = receiveMultipart(socket_, filter);
+                if (!received.received)
                 {
                     break;
                 }
-                latest = std::move(messages);
+                ++result.receivedMessages;
+                result.copiedPayloadBytes += received.copiedPayloadBytes;
+                if (received.accepted)
+                {
+                    result.message = std::move(received.messages);
+                }
+                else
+                {
+                    ++result.filteredMessages;
+                }
             }
-            return latest;
+            return result;
         }
 
         void changeEndpoint(const std::string &endpoint)
@@ -215,14 +283,19 @@ namespace frameviz
 
     FrameReceiver &FrameReceiver::operator=(FrameReceiver &&) noexcept = default;
 
-    MultipartFrameMessage FrameReceiver::receiveLatest() const
+    FrameReceiveResult FrameReceiver::receiveLatest() const
+    {
+        return receiveLatest({});
+    }
+
+    FrameReceiveResult FrameReceiver::receiveLatest(const FrameMessageFilter &filter) const
     {
         if (!impl_)
         {
             throw std::logic_error("cannot receive with a moved-from FrameReceiver");
         }
 
-        return impl_->receiveLatest();
+        return impl_->receiveLatest(filter);
     }
 
     void FrameReceiver::changeEndpoint(const std::string &endpoint) const
@@ -241,4 +314,4 @@ namespace frameviz
 
         return impl_ ? impl_->endpoint() : empty;
     }
-} // namespace frameviz
+} // namespace frame_scope

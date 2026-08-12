@@ -8,7 +8,7 @@
 
 #include <opencv2/core/mat.hpp>
 
-namespace frameviz
+namespace frame_scope
 {
 
 /**
@@ -90,7 +90,7 @@ struct FrameSendResult
 };
 
 /**
- * @brief 将 cv::Mat 发布为 FrameVisualizer 可直接接收的 ZMQ 消息
+ * @brief 将 cv::Mat 发布为 frame-scope 可直接接收的 ZMQ 消息
  *
  * @details 实例内部串行化 publish 调用，可由多个线程共享。构造、编码或发送失败时
  * 抛出 std::invalid_argument 或 std::runtime_error。
@@ -182,4 +182,4 @@ uint64_t monotonicTimestampNs();
  */
 uint64_t unixTimestampNs();
 
-} // namespace frameviz
+} // namespace frame_scope
