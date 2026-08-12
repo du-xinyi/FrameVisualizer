@@ -1141,6 +1141,12 @@ void resetStreamState(AppState &state)
     state.historySize = 0;
     state.historyOffset = 0;
     state.roiValid = false;
+    state.filteredFrameCount = 0;
+    if (state.autoLockSource)
+    {
+        state.lockedSourceId.clear();
+    }
+    state.detectedSources.clear();
     state.lastFrame.release();
 }
 
@@ -1318,7 +1324,34 @@ int runApplication(const int argc, char **argv)
         if (auto decoded = frameDecoder.poll();
             decoded && !state.paused && decoded->generation == endpointGeneration)
         {
-            acceptDecodedPacket(std::move(*decoded), state, frameHistory, frameRates);
+            if (state.sourceLockEnabled)
+            {
+                if (!decoded->sourceId.empty())
+                {
+                    if (std::find(state.detectedSources.begin(), state.detectedSources.end(),
+                                  decoded->sourceId) == state.detectedSources.end())
+                    {
+                        state.detectedSources.push_back(decoded->sourceId);
+                    }
+                }
+                if (state.lockedSourceId.empty() && state.autoLockSource && !decoded->sourceId.empty())
+                {
+                    state.lockedSourceId = decoded->sourceId;
+                    std::cout << "Auto-locked to source: " << state.lockedSourceId << '\n';
+                }
+                if (!state.lockedSourceId.empty() && decoded->sourceId != state.lockedSourceId)
+                {
+                    ++state.filteredFrameCount;
+                }
+                else
+                {
+                    acceptDecodedPacket(std::move(*decoded), state, frameHistory, frameRates);
+                }
+            }
+            else
+            {
+                acceptDecodedPacket(std::move(*decoded), state, frameHistory, frameRates);
+            }
         }
 
         if (videoPlayer.isOpen())

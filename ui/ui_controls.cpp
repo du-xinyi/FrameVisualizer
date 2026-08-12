@@ -179,6 +179,67 @@ void UiContext::Impl::drawControlPanel(AppState &state, const ImVec2 &displaySiz
             ImGui::TextWrapped("Source: %s", state.sourceId.empty() ? "-" : state.sourceId.c_str());
             ImGui::TextWrapped("Payload: %s",
                 state.payloadInfo.empty() ? "-" : state.payloadInfo.c_str());
+            ImGui::Separator();
+            ImGui::TextDisabled("Source lock");
+            if (ImGui::Checkbox("Filter by source", &state.sourceLockEnabled))
+            {
+                if (!state.sourceLockEnabled)
+                {
+                    state.lockedSourceId.clear();
+                    state.filteredFrameCount = 0;
+                }
+            }
+            ImGui::BeginDisabled(!state.sourceLockEnabled);
+            ImGui::Checkbox("Auto-lock first", &state.autoLockSource);
+            {
+                int currentItem = 0;
+                if (state.lockedSourceId.empty())
+                {
+                    currentItem = 0;
+                }
+                else
+                {
+                    for (std::size_t i = 0; i < state.detectedSources.size(); ++i)
+                    {
+                        if (state.detectedSources[i] == state.lockedSourceId)
+                        {
+                            currentItem = static_cast<int>(i) + 1;
+                            break;
+                        }
+                    }
+                }
+                if (ImGui::BeginCombo("Lock to", currentItem == 0 ? "any source" :
+                    state.lockedSourceId.c_str()))
+                {
+                    if (ImGui::Selectable("any source", currentItem == 0))
+                    {
+                        state.lockedSourceId.clear();
+                        state.filteredFrameCount = 0;
+                    }
+                    for (std::size_t i = 0; i < state.detectedSources.size(); ++i)
+                    {
+                        const bool selected = static_cast<int>(i) + 1 == currentItem;
+                        if (ImGui::Selectable(state.detectedSources[i].c_str(), selected))
+                        {
+                            state.lockedSourceId = state.detectedSources[i];
+                            state.filteredFrameCount = 0;
+                        }
+                        if (selected)
+                        {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+            if (state.filteredFrameCount > 0)
+            {
+                char filteredText[64];
+                std::snprintf(filteredText, sizeof(filteredText), "%llu frames",
+                    static_cast<unsigned long long>(state.filteredFrameCount));
+                ImGui::TextDisabled("Filtered: %s", filteredText);
+            }
+            ImGui::EndDisabled();
             ImGui::TreePop();
         }
     }

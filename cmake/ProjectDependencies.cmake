@@ -12,6 +12,7 @@ find_package(Protobuf REQUIRED)
 
 pkg_check_modules(OPENCV REQUIRED IMPORTED_TARGET opencv4)
 pkg_check_modules(LIBZMQ REQUIRED IMPORTED_TARGET libzmq)
+pkg_check_modules(PROTOBUF_LIBS REQUIRED IMPORTED_TARGET protobuf)
 
 # FindProtobuf 的模块模式和配置模式均应提供这些标准目标。提前检查可以给出比
 # target_link_libraries 阶段更明确的错误。

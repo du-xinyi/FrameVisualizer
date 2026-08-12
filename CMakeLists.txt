@@ -34,7 +34,7 @@ add_library(FrameVisualizer::Protocol ALIAS FrameProtocol)
 
 target_compile_features(FrameProtocol PUBLIC cxx_std_20)
 target_include_directories(FrameProtocol PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
-target_link_libraries(FrameProtocol PUBLIC protobuf::libprotobuf)
+target_link_libraries(FrameProtocol PUBLIC protobuf::libprotobuf PkgConfig::PROTOBUF_LIBS)
 
 add_custom_command(
     TARGET FrameProtocol
